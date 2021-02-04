@@ -1,10 +1,20 @@
-﻿namespace Caliburn.Micro {
+﻿#if XFORMS
+namespace Caliburn.Micro.Xamarin.Forms
+#else
+namespace Caliburn.Micro
+#endif
+{
     using System;
     using System.Linq;
     using System.Reflection;
     using System.Text.RegularExpressions;
     using System.Collections.Generic;
-#if !WinRT
+#if XFORMS
+    using global::Xamarin.Forms;
+    using UIElement = global::Xamarin.Forms.Element;
+    using TextBlock = global::Xamarin.Forms.Label;
+    using DependencyObject = global::Xamarin.Forms.BindableObject;
+#elif !WINDOWS_UWP
     using System.Windows;
     using System.Windows.Controls;
 #else
@@ -12,7 +22,7 @@
     using Windows.UI.Xaml.Controls;
 #endif
 
-#if !SILVERLIGHT && !WinRT
+#if !WINDOWS_UWP && !XFORMS
     using System.Windows.Interop;
 #endif
 
@@ -258,8 +268,8 @@
                 return view;
             }
 
-#if !WinRT
-            if(viewType.IsInterface || viewType.IsAbstract || !typeof(UIElement).IsAssignableFrom(viewType))
+#if !WINDOWS_UWP && !XFORMS
+            if (viewType.IsInterface || viewType.IsAbstract || !typeof(UIElement).IsAssignableFrom(viewType))
                 return new TextBlock { Text = string.Format("Cannot create {0}.", viewType.FullName) };
 #else
             var viewTypeInfo = viewType.GetTypeInfo();
@@ -270,7 +280,9 @@
 #endif
 
             view = (UIElement)System.Activator.CreateInstance(viewType);
+
             InitializeComponent(view);
+
             return view;
         };
 
@@ -384,7 +396,7 @@
             if (viewAware != null) {
                 var view = viewAware.GetView(context) as UIElement;
                 if (view != null) {
-#if !SILVERLIGHT && !WinRT
+#if !WINDOWS_UWP && !XFORMS
                     var windowCheck = view as Window;
                     if (windowCheck == null || (!windowCheck.IsLoaded && !(new WindowInteropHelper(windowCheck).Handle == IntPtr.Zero))) {
                         Log.Info("Using cached view for {0}.", model);
@@ -404,25 +416,25 @@
         /// Transforms a view type into a pack uri.
         /// </summary>
         public static Func<Type, Type, string> DeterminePackUriFromType = (viewModelType, viewType) => {
-#if !WinRT
+#if !WINDOWS_UWP && !XFORMS
             var assemblyName = viewType.Assembly.GetAssemblyName();
-            var uri = viewType.FullName.Replace(assemblyName, string.Empty).Replace(".", "/") + ".xaml";
-
-            if(!Application.Current.GetType().Assembly.GetAssemblyName().Equals(assemblyName)) {
-                return "/" + assemblyName + ";component" + uri;
-            }
-
-            return uri;
+            var applicationAssemblyName = Application.Current.GetType().Assembly.GetAssemblyName();
 #else
             var assemblyName = viewType.GetTypeInfo().Assembly.GetAssemblyName();
-            var uri = viewType.FullName.Replace(assemblyName, string.Empty).Replace(".", "/") + ".xaml";
+            var applicationAssemblyName = Application.Current.GetType().GetTypeInfo().Assembly.GetAssemblyName();
+#endif
+            var viewTypeName = viewType.FullName;
 
-            if (!Application.Current.GetType().GetTypeInfo().Assembly.GetAssemblyName().Equals(assemblyName)) {
+            if (viewTypeName.StartsWith(assemblyName))
+                viewTypeName = viewTypeName.Substring(assemblyName.Length);
+
+            var uri = viewTypeName.Replace(".", "/") + ".xaml";
+
+            if(!applicationAssemblyName.Equals(assemblyName)) {
                 return "/" + assemblyName + ";component" + uri;
             }
 
             return uri;
-#endif
         };
 
         /// <summary>
@@ -430,18 +442,20 @@
         /// </summary>
         /// <param name = "element">The element to initialize</param>
         public static void InitializeComponent(object element) {
-#if !WinRT
+#if XFORMS
+            return;
+#elif !WINDOWS_UWP
             var method = element.GetType()
                 .GetMethod("InitializeComponent", BindingFlags.Public | BindingFlags.Instance);
+
+            method?.Invoke(element, null);
 #else
             var method = element.GetType().GetTypeInfo()
-                .GetDeclaredMethod("InitializeComponent");
+                .GetDeclaredMethods("InitializeComponent")
+                .SingleOrDefault(m => m.GetParameters().Length == 0);
+
+            method?.Invoke(element, null);
 #endif
-
-            if (method == null)
-                return;
-
-            method.Invoke(element, null);
         }
     }
 }

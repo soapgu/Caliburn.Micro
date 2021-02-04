@@ -1,13 +1,26 @@
-﻿namespace Caliburn.Micro {
+﻿#if XFORMS
+namespace Caliburn.Micro.Xamarin.Forms
+#else
+namespace Caliburn.Micro
+#endif
+{
     using System;
     using System.Linq;
-#if WinRT
+#if WINDOWS_UWP
     using System.Reflection;
     using Windows.ApplicationModel;
     using Windows.UI.Xaml;
     using Windows.UI.Xaml.Controls;
     using Windows.UI.Xaml.Markup;
     using Windows.UI.Xaml.Media;
+#elif XFORMS
+    using System.Reflection;
+    using global::Xamarin.Forms;
+    using UIElement = global::Xamarin.Forms.Element;
+    using FrameworkElement = global::Xamarin.Forms.VisualElement;
+    using DependencyProperty = global::Xamarin.Forms.BindableProperty;
+    using DependencyObject = global::Xamarin.Forms.BindableObject;
+    using ContentControl = global::Xamarin.Forms.ContentView;
 #else
     using System.ComponentModel;
     using System.Windows;
@@ -20,7 +33,7 @@
     /// </summary>
     public static class View {
         static readonly ILog Log = LogManager.GetLog(typeof(View));
-#if WinRT
+#if WINDOWS_UWP || XFORMS
         const string DefaultContentPropertyName = "Content";
 #else
         static readonly ContentPropertyAttribute DefaultContentProperty = new ContentPropertyAttribute("Content");
@@ -30,66 +43,67 @@
         /// A dependency property which allows the framework to track whether a certain element has already been loaded in certain scenarios.
         /// </summary>
         public static readonly DependencyProperty IsLoadedProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "IsLoaded",
                 typeof(bool),
                 typeof(View),
-                new PropertyMetadata(false)
+                false
                 );
 
         /// <summary>
         /// A dependency property which marks an element as a name scope root.
         /// </summary>
         public static readonly DependencyProperty IsScopeRootProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "IsScopeRoot",
                 typeof(bool),
                 typeof(View),
-                new PropertyMetadata(false)
+                false
                 );
 
         /// <summary>
         /// A dependency property which allows the override of convention application behavior.
         /// </summary>
         public static readonly DependencyProperty ApplyConventionsProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "ApplyConventions",
                 typeof(bool?),
-                typeof(View),
-                null
+                typeof(View)
                 );
 
         /// <summary>
         /// A dependency property for assigning a context to a particular portion of the UI.
         /// </summary>
         public static readonly DependencyProperty ContextProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "Context",
                 typeof(object),
                 typeof(View),
-                new PropertyMetadata(null, OnContextChanged)
+                null, 
+                OnContextChanged
                 );
 
         /// <summary>
         /// A dependency property for attaching a model to the UI.
         /// </summary>
         public static DependencyProperty ModelProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "Model",
                 typeof(object),
                 typeof(View),
-                new PropertyMetadata(null, OnModelChanged)
+                null, 
+                OnModelChanged
                 );
 
         /// <summary>
         /// Used by the framework to indicate that this element was generated.
         /// </summary>
         public static readonly DependencyProperty IsGeneratedProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "IsGenerated",
                 typeof(bool),
                 typeof(View),
-                new PropertyMetadata(false)
+                false
                 );
 
         /// <summary>
@@ -99,12 +113,14 @@
         /// <param name="handler">The handler.</param>
         /// <returns>true if the handler was executed immediately; false otherwise</returns>
         public static bool ExecuteOnLoad(FrameworkElement element, RoutedEventHandler handler) {
-#if SILVERLIGHT
-            if ((bool)element.GetValue(IsLoadedProperty)) {
-#elif WinRT
+#if XFORMS
+            handler(element, new RoutedEventArgs());
+            return true;
+#else
+#if WINDOWS_UWP
             if (IsElementLoaded(element)) {
 #else
-            if(element.IsLoaded) {
+            if (element.IsLoaded) {
 #endif
                 handler(element, new RoutedEventArgs());
                 return true;
@@ -113,13 +129,12 @@
             RoutedEventHandler loaded = null;
             loaded = (s, e) => {
                 element.Loaded -= loaded;
-#if SILVERLIGHT
-                element.SetValue(IsLoadedProperty, true);
-#endif
                 handler(s, e);
             };
             element.Loaded += loaded;
             return false;
+#endif
+
         }
 
         /// <summary>
@@ -128,15 +143,17 @@
         /// <param name="element">The element.</param>
         /// <param name="handler">The handler.</param>
         public static void ExecuteOnUnload(FrameworkElement element, RoutedEventHandler handler) {
+#if !XFORMS
             RoutedEventHandler unloaded = null;
             unloaded = (s, e) => {
                 element.Unloaded -= unloaded;
                 handler(s, e);
             };
             element.Unloaded += unloaded;
+#endif
         }
 
-#if WinRT
+#if WINDOWS_UWP
         /// <summary>
         /// Determines whether the specified <paramref name="element"/> is loaded.
         /// </summary>
@@ -167,13 +184,13 @@
             }
         }
 #endif
-
+#if !XFORMS
         /// <summary>
         /// Executes the handler the next time the elements's LayoutUpdated event fires.
         /// </summary>
         /// <param name="element">The element.</param>
         /// <param name="handler">The handler.</param>
-#if WinRT
+#if WINDOWS_UWP
         public static void ExecuteOnLayoutUpdated(FrameworkElement element, EventHandler<object> handler) {
             EventHandler<object> onLayoutUpdate = null;
 #else
@@ -185,13 +202,13 @@
                 handler(element, e);
             };
             element.LayoutUpdated += onLayoutUpdate;
+
         }
+#endif
 
         /// <summary>
         /// Used to retrieve the root, non-framework-created view.
         /// </summary>
-        /// <param name="view">The view to search.</param>
-        /// <returns>The root element that was not created by the framework.</returns>
         /// <remarks>In certain instances the services create UI elements.
         /// For example, if you ask the window manager to show a UserControl as a dialog, it creates a window to host the UserControl in.
         /// The WindowManager marks that element as a framework-created element so that it can determine what it created vs. what was intended by the developer.
@@ -207,7 +224,7 @@
                 if (dependencyObject is ContentControl) {
                     return ((ContentControl)dependencyObject).Content;
                 }
-#if WinRT
+#if WINDOWS_UWP || XFORMS
                 var type = dependencyObject.GetType();
                 var contentPropertyName = GetContentPropertyName(type);
 
@@ -215,7 +232,8 @@
                     .GetValue(dependencyObject, null);
 #else
                 var type = dependencyObject.GetType();
-                var contentProperty = type.GetAttributes<ContentPropertyAttribute>(true)
+                var contentProperty = type.GetCustomAttributes(typeof(ContentPropertyAttribute), true)
+                                          .OfType<ContentPropertyAttribute>()
                                           .FirstOrDefault() ?? DefaultContentProperty;
 
                 return type.GetProperty(contentProperty.Name)
@@ -287,10 +305,17 @@
 
             if (args.NewValue != null) {
                 var context = GetContext(targetLocation);
+                
                 var view = ViewLocator.LocateForModel(args.NewValue, targetLocation, context);
-
-                SetContentProperty(targetLocation, view);
                 ViewModelBinder.Bind(args.NewValue, view, context);
+                if (!SetContentProperty(targetLocation, view)) {
+
+                    Log.Warn("SetContentProperty failed for ViewLocator.LocateForModel, falling back to LocateForModelType");
+
+                    view = ViewLocator.LocateForModelType(args.NewValue.GetType(), targetLocation, context);
+
+                    SetContentProperty(targetLocation, view);
+                }
             }
             else {
                 SetContentProperty(targetLocation, args.NewValue);
@@ -309,54 +334,68 @@
 
             var view = ViewLocator.LocateForModel(model, targetLocation, e.NewValue);
 
-            SetContentProperty(targetLocation, view);
+            if (!SetContentProperty(targetLocation, view)) {
+
+                Log.Warn("SetContentProperty failed for ViewLocator.LocateForModel, falling back to LocateForModelType");
+
+                view = ViewLocator.LocateForModelType(model.GetType(), targetLocation, e.NewValue);
+
+                SetContentProperty(targetLocation, view);
+            }
+
             ViewModelBinder.Bind(model, view, e.NewValue);
         }
 
-        static void SetContentProperty(object targetLocation, object view) {
+        static bool SetContentProperty(object targetLocation, object view) {
             var fe = view as FrameworkElement;
             if (fe != null && fe.Parent != null) {
                 SetContentPropertyCore(fe.Parent, null);
             }
 
-            SetContentPropertyCore(targetLocation, view);
+            return SetContentPropertyCore(targetLocation, view);
         }
 
-#if WinRT
-        static void SetContentPropertyCore(object targetLocation, object view) {
+#if WINDOWS_UWP || XFORMS
+        static bool SetContentPropertyCore(object targetLocation, object view) {
             try {
                 var type = targetLocation.GetType();
                 var contentPropertyName = GetContentPropertyName(type);
 
                 type.GetRuntimeProperty(contentPropertyName)
                     .SetValue(targetLocation, view, null);
+
+                return true;
             }
             catch (Exception e) {
                 Log.Error(e);
+
+                return false;
             }
         }
 
         private static string GetContentPropertyName(Type type) {
             var typeInfo = type.GetTypeInfo();
-            var contentProperty = typeInfo.CustomAttributes
-                .FirstOrDefault(a => a.AttributeType == typeof(ContentPropertyAttribute));
-
-            return contentProperty == null ?
-                DefaultContentPropertyName :
-                contentProperty.NamedArguments[0].TypedValue.Value.ToString();
+            var contentProperty = typeInfo.GetCustomAttribute<ContentPropertyAttribute>();
+            
+            return contentProperty?.Name ?? DefaultContentPropertyName;
         }
 #else
-        static void SetContentPropertyCore(object targetLocation, object view) {
+        static bool SetContentPropertyCore(object targetLocation, object view) {
             try {
                 var type = targetLocation.GetType();
-                var contentProperty = type.GetAttributes<ContentPropertyAttribute>(true)
+                var contentProperty = type.GetCustomAttributes(typeof(ContentPropertyAttribute), true)
+                                          .OfType<ContentPropertyAttribute>()
                                           .FirstOrDefault() ?? DefaultContentProperty;
 
-                type.GetProperty(contentProperty.Name)
+                type.GetProperty(contentProperty?.Name ?? DefaultContentProperty.Name)
                     .SetValue(targetLocation, view, null);
+
+                return true;
             }
             catch(Exception e) {
                 Log.Error(e);
+
+                return false;
             }
         }
 #endif
@@ -372,10 +411,10 @@
             {
                 if (inDesignMode == null)
                 {
-#if WinRT
+#if XFORMS
+                    inDesignMode = false;
+#elif WINDOWS_UWP
                     inDesignMode = DesignMode.DesignModeEnabled;
-#elif SILVERLIGHT
-                    inDesignMode = DesignerProperties.IsInDesignTool;
 #else
                     var descriptor = DependencyPropertyDescriptor.FromProperty(DesignerProperties.IsInDesignModeProperty, typeof(FrameworkElement));
                     inDesignMode = (bool)descriptor.Metadata.DefaultValue;

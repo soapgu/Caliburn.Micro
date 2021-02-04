@@ -1,18 +1,13 @@
-﻿namespace Caliburn.Micro
+﻿#if XFORMS
+namespace Caliburn.Micro.Xamarin.Forms
+#else
+namespace Caliburn.Micro
+#endif
 {
     using System;
     using System.Collections.Generic;
     using System.Linq;
-#if WinRT && !WinRT81
-    using Windows.UI.Xaml;
-    using Windows.UI.Interactivity;
-    using TriggerBase = Windows.UI.Interactivity.TriggerBase;
-    using EventTrigger = Windows.UI.Interactivity.EventTrigger;
-    using TriggerAction = Windows.UI.Interactivity.TriggerAction;
-    using System.Text;
-    using System.Text.RegularExpressions;
-    using Windows.UI.Xaml.Data;
-#elif WinRT81
+#if WINDOWS_UWP
     using System.Reflection;
     using Windows.UI.Xaml;
     using Microsoft.Xaml.Interactivity;
@@ -22,14 +17,20 @@
     using System.Text;
     using System.Text.RegularExpressions;
     using Windows.UI.Xaml.Data;
+#elif XFORMS
+    using System.Reflection;
+    using System.Text.RegularExpressions;
+    using global::Xamarin.Forms;
+    using DependencyObject = global::Xamarin.Forms.BindableObject;
+    using FrameworkElement = global::Xamarin.Forms.VisualElement;
 #else
     using System.Reflection;
     using System.Text.RegularExpressions;
     using System.Windows;
     using System.Windows.Data;
-    using EventTrigger = System.Windows.Interactivity.EventTrigger;
-    using TriggerBase = System.Windows.Interactivity.TriggerBase;
-    using TriggerAction = System.Windows.Interactivity.TriggerAction;
+    using EventTrigger = Microsoft.Xaml.Behaviors.EventTrigger;
+    using TriggerBase = Microsoft.Xaml.Behaviors.TriggerBase;
+    using TriggerAction = Microsoft.Xaml.Behaviors.TriggerAction;
     using System.Text;
 #endif
 
@@ -71,7 +72,7 @@
                 var trigger = CreateTrigger(target, triggerPlusMessage.Length == 1 ? null : triggerPlusMessage[0]);
                 var message = CreateMessage(target, messageDetail);
 
-#if WinRT81
+#if WINDOWS_UWP || XFORMS
                 AddActionToTrigger(target, message, trigger);
 #else
                 trigger.Actions.Add(message);
@@ -83,7 +84,33 @@
             return triggers;
         }
 
-#if WinRT81
+#if XFORMS
+        private static void AddActionToTrigger(DependencyObject target, TriggerAction message, TriggerBase trigger) {
+
+            if (trigger is EventTrigger) {
+                var eventTrigger = (EventTrigger) trigger;
+
+                eventTrigger.Actions.Add(message);
+            }
+
+            trigger.EnterActions.Add(message);
+
+            // TriggerAction doesn't have an associated object property so we have
+            // to create it ourselves, could be potential issues here with leaking the associated 
+            // object and not correctly detaching, this may depend if the trigger implements it's
+            // AssociatedObject as a DependencyProperty.
+
+            var actionMessage = message as ActionMessage;
+            var targetElement = target as FrameworkElement;
+
+            if (actionMessage != null && targetElement != null)
+            {
+                actionMessage.AssociatedObject = targetElement;
+            }
+        }
+#endif
+
+#if WINDOWS_UWP
 
         private static void AddActionToTrigger(DependencyObject target, TriggerAction message, TriggerBase trigger)
         {
@@ -175,8 +202,11 @@
                 .Replace("]", string.Empty)
                 .Replace("Event", string.Empty)
                 .Trim();
-
+#if XFORMS
+            return new EventTrigger { Event = triggerDetail };
+#else
             return new EventTrigger { EventName = triggerDetail };
+#endif
         };
 
         /// <summary>
@@ -236,7 +266,7 @@
             {
                 actualParameter.Value = parameterText.Substring(1, parameterText.Length - 2);
             }
-            else if (MessageBinder.SpecialValues.ContainsKey(parameterText.ToLower()) || char.IsNumber(parameterText[0]))
+            else if (MessageBinder.SpecialValues.ContainsKey(parameterText.ToLower()) || decimal.TryParse(parameterText, out _))
             {
                 actualParameter.Value = parameterText;
             }
@@ -261,6 +291,7 @@
             return actualParameter;
         };
 
+
         /// <summary>
         /// Creates a binding on a <see cref="Parameter"/>.
         /// </summary>
@@ -271,6 +302,26 @@
         /// <param name="bindingMode">The binding mode to use.</param>
         public static void BindParameter(FrameworkElement target, Parameter parameter, string elementName, string path, BindingMode bindingMode)
         {
+#if XFORMS
+            var element = elementName == "$this" ? target : null;
+
+            if (element == null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(path))
+            {
+                path = ConventionManager.GetElementConvention(element.GetType()).ParameterProperty;
+            }
+
+            var binding = new Binding(path) {
+                Source = element,
+                Mode = bindingMode
+            };
+
+            parameter.SetBinding(Parameter.ValueProperty, binding);
+#else
             var element = elementName == "$this"
                 ? target
                 : BindingScope.GetNamedElements(target).FindName(elementName);
@@ -283,7 +334,7 @@
             {
                 path = ConventionManager.GetElementConvention(element.GetType()).ParameterProperty;
             }
-#if WinRT
+#if WINDOWS_UWP
             var binding = new Binding
             {
                 Path = new PropertyPath(path),
@@ -297,19 +348,10 @@
             };
 #endif
 
-#if (SILVERLIGHT && !SL5)
-            var expression = (BindingExpression)BindingOperations.SetBinding(parameter, Parameter.ValueProperty, binding);
-
-            var field = element.GetType().GetField(path + "Property", BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
-            if (field == null) {
-                return;
-            }
-
-            ConventionManager.ApplySilverlightTriggers(element, (DependencyProperty)field.GetValue(null), x => expression, null, null);
-#else
-#if !WinRT
+#if !WINDOWS_UWP
             binding.UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged;
 #endif
+
             BindingOperations.SetBinding(parameter, Parameter.ValueProperty, binding);
 #endif
         }

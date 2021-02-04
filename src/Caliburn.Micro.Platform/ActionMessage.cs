@@ -1,21 +1,11 @@
-﻿namespace Caliburn.Micro {
+﻿namespace Caliburn.Micro
+{
     using System;
     using System.Collections.Generic;
     using System.ComponentModel;
     using System.Linq;
     using System.Reflection;
-#if WinRT && !WinRT81
-    using Windows.UI.Xaml;
-    using Windows.UI.Xaml.Data;
-    using Windows.UI.Interactivity;
-    using Windows.UI.Xaml.Markup;
-    using Windows.UI.Xaml.Media;
-    using Windows.UI.Xaml.Controls.Primitives;
-    using Windows.UI.Xaml.Controls;
-    using TriggerBase = Windows.UI.Interactivity.TriggerBase;
-    using EventTrigger = Windows.UI.Interactivity.EventTrigger;
-    using TriggerAction = Windows.UI.Interactivity.TriggerAction;
-#elif WinRT81
+#if WINDOWS_UWP
     using Windows.UI.Xaml;
     using Windows.UI.Xaml.Data;
     using Windows.UI.Xaml.Markup;
@@ -26,19 +16,21 @@
     using EventTrigger = Microsoft.Xaml.Interactions.Core.EventTriggerBehavior;
 #else
     using System.Windows;
-    using System.Windows.Controls;
     using System.Windows.Controls.Primitives;
     using System.Windows.Data;
-    using System.Windows.Interactivity;
     using System.Windows.Markup;
-    using System.Windows.Media;
-    using EventTrigger = System.Windows.Interactivity.EventTrigger;
+    using Microsoft.Xaml.Behaviors;
+    using EventTrigger = Microsoft.Xaml.Behaviors.EventTrigger;
+#endif
+#if NET5_0_WINDOWS
+    using System.IO;
+    using System.Xml;
 #endif
 
     /// <summary>
     /// Used to send a message from the UI to a presentation model class, indicating that a particular Action should be invoked.
     /// </summary>
-#if WinRT
+#if WINDOWS_UWP
     [ContentProperty(Name = "Parameters")]
 #else
     [ContentProperty("Parameters")]
@@ -49,10 +41,6 @@
     public class ActionMessage : TriggerAction<FrameworkElement>, IHaveParameters {
         static readonly ILog Log = LogManager.GetLog(typeof(ActionMessage));
         ActionExecutionContext context;
-
-#if WINDOWS_PHONE
-        internal Microsoft.Phone.Shell.IApplicationBarMenuItem applicationBarSource;
-#endif
 
         internal static readonly DependencyProperty HandlerProperty = DependencyProperty.RegisterAttached(
             "Handler",
@@ -106,7 +94,7 @@
         /// Gets or sets the name of the method to be invoked on the presentation model class.
         /// </summary>
         /// <value>The name of the method.</value>
-#if !WinRT
+#if !WINDOWS_UWP
         [Category("Common Properties")]
 #endif
         public string MethodName {
@@ -118,9 +106,9 @@
         /// Gets the parameters to pass as part of the method invocation.
         /// </summary>
         /// <value>The parameters.</value>
-#if !WinRT
+#if !WINDOWS_UWP
         [Category("Common Properties")]
-#endif  
+#endif
         public AttachedCollection<Parameter> Parameters {
             get { return (AttachedCollection<Parameter>)GetValue(ParametersProperty); }
         }
@@ -133,7 +121,7 @@
         /// <summary>
         /// Called after the action is attached to an AssociatedObject.
         /// </summary>
-#if WinRT81
+#if WINDOWS_UWP
         protected override void OnAttached() {
             if (!View.InDesignMode) {
                 Parameters.Attach(AssociatedObject);
@@ -203,20 +191,26 @@
                     if (Action.HasTargetSet(currentElement))
                         break;
 
-                    currentElement = VisualTreeHelper.GetParent(currentElement);
+                    currentElement = BindingScope.GetVisualParent(currentElement);
                 }
             }
             else currentElement = context.View;
 
-#if NET
+#if NET || NETCORE
             var binding = new Binding {
                 Path = new PropertyPath(Message.HandlerProperty), 
                 Source = currentElement
             };
-#elif WinRT
+#elif WINDOWS_UWP
             var binding = new Binding {
                 Source = currentElement
             };
+#elif NET5_0_WINDOWS
+            const string bindingText = "<Binding xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation\' xmlns:cal='clr-namespace:Caliburn.Micro;assembly=Caliburn.Micro.Platform' Path='(cal:Message.Handler)' />";
+            StringReader stringReader = new StringReader(bindingText);
+            XmlReader xmlReader = XmlReader.Create(stringReader);
+            var binding = (Binding)XamlReader.Load(xmlReader);
+            binding.Source = currentElement;
 #else
             const string bindingText = "<Binding xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation\' xmlns:cal='clr-namespace:Caliburn.Micro;assembly=Caliburn.Micro.Platform' Path='(cal:Message.Handler)' />";
 
@@ -288,7 +282,7 @@
         /// <summary>
         /// Forces an update of the UI's Enabled/Disabled state based on the the preconditions associated with the method.
         /// </summary>
-        public void UpdateAvailability() {
+        public virtual void UpdateAvailability() {
             if (context == null)
                 return;
 
@@ -352,17 +346,8 @@
         /// </summary>
         /// <remarks>Returns a value indicating whether or not the action is available.</remarks>
         public static Func<ActionExecutionContext, bool> ApplyAvailabilityEffect = context => {
-#if WINDOWS_PHONE
-            var message = context.Message;
-            if (message != null && message.applicationBarSource != null) {
-                if (context.CanExecute != null) {
-                    message.applicationBarSource.IsEnabled = context.CanExecute();
-                }
-                return message.applicationBarSource.IsEnabled;
-            }
-#endif
 
-#if SILVERLIGHT || WinRT
+#if WINDOWS_UWP
             var source = context.Source as Control;
 #else
             var source = context.Source;
@@ -371,7 +356,7 @@
                 return true;
             }
 
-#if SILVERLIGHT || WinRT
+#if WINDOWS_UWP
             var hasBinding = ConventionManager.HasBinding(source, Control.IsEnabledProperty);
 #else
             var hasBinding = ConventionManager.HasBinding(source, UIElement.IsEnabledProperty);
@@ -386,11 +371,9 @@
         /// <summary>
         /// Finds the method on the target matching the specified message.
         /// </summary>
-        /// <param name="target">The target.</param>
-        /// <param name="message">The message.</param>
         /// <returns>The matching method, if available.</returns>
         public static Func<ActionMessage, object, MethodInfo> GetTargetMethod = (message, target) => {
-#if WinRT
+#if WINDOWS_UWP
             return (from method in target.GetType().GetRuntimeMethods()
                     where method.Name == message.MethodName
                     let methodParameters = method.GetParameters()
@@ -430,7 +413,7 @@
                     }
                 }
 
-                currentElement = VisualTreeHelper.GetParent(currentElement);
+                currentElement = BindingScope.GetVisualParent(currentElement);
             }
 
             if (source != null && source.DataContext != null) {
@@ -450,32 +433,40 @@
         /// </summary>
         public static Action<ActionExecutionContext> PrepareContext = context => {
             SetMethodBinding(context);
-            if (context.Target == null || context.Method == null) {
+            if (context.Target == null || context.Method == null)
+            {
                 return;
             }
+            var possibleGuardNames = BuildPossibleGuardNames(context.Method).ToList();
 
-            var guardName = "Can" + context.Method.Name;
-            var targetType = context.Target.GetType();
-            var guard = TryFindGuardMethod(context);
+            var guard = TryFindGuardMethod(context, possibleGuardNames);
 
-            if (guard == null) {
+            if (guard == null)
+            {
                 var inpc = context.Target as INotifyPropertyChanged;
                 if (inpc == null)
                     return;
-#if WinRT
-                guard = targetType.GetRuntimeMethods().SingleOrDefault(m => m.Name == "get_" + guardName);
-#else
-                guard = targetType.GetMethod("get_" + guardName);
-#endif
+
+                var targetType = context.Target.GetType();
+                string matchingGuardName = null;
+                foreach (string possibleGuardName in possibleGuardNames)
+                {
+                    matchingGuardName = possibleGuardName;
+                    guard = GetMethodInfo(targetType, "get_" + matchingGuardName);
+                    if (guard != null) break;
+                }
+
                 if (guard == null)
                     return;
 
                 PropertyChangedEventHandler handler = null;
                 handler = (s, e) => {
-                    if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == guardName) {
+                    if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == matchingGuardName)
+                    {
                         Caliburn.Micro.Execute.OnUIThread(() => {
                             var message = context.Message;
-                            if (message == null) {
+                            if (message == null)
+                            {
                                 inpc.PropertyChanged -= handler;
                                 return;
                             }
@@ -491,24 +482,27 @@
 
             context.CanExecute = () => (bool)guard.Invoke(
                 context.Target,
-                MessageBinder.DetermineParameters(context, guard.GetParameters())
-                );
+                MessageBinder.DetermineParameters(context, guard.GetParameters()));
         };
 
         /// <summary>
-        /// Try to find a candidate for guard function, having:
-        ///		- a name in the form "CanXXX"
-        ///		- no generic parameters
-        ///		- a bool return type
-        ///		- no parameters or a set of parameters corresponding to the action method
+        /// Try to find a candidate for guard function, having: 
+        ///    - a name matching any of <paramref name="possibleGuardNames"/>
+        ///    - no generic parameters
+        ///    - a bool return type
+        ///    - no parameters or a set of parameters corresponding to the action method
         /// </summary>
         /// <param name="context">The execution context</param>
-        /// <returns>A MethodInfo, if found; null otherwise</returns>
-        static MethodInfo TryFindGuardMethod(ActionExecutionContext context) {
-#if WinRT
-            var guardName = "Can" + context.Method.Name;
+        /// <param name="possibleGuardNames">Method names to look for.</param>
+        ///<returns>A MethodInfo, if found; null otherwise</returns>
+        static MethodInfo TryFindGuardMethod(ActionExecutionContext context, IEnumerable<string> possibleGuardNames) {
             var targetType = context.Target.GetType();
-            var guard = targetType.GetRuntimeMethods().SingleOrDefault(m => m.Name == guardName);
+            MethodInfo guard = null;
+            foreach (string possibleGuardName in possibleGuardNames)
+            {
+                guard = GetMethodInfo(targetType, possibleGuardName);
+                if (guard != null) break;
+            }
 
             if (guard == null) return null;
             if (guard.ContainsGenericParameters) return null;
@@ -521,38 +515,45 @@
 
             var comparisons = guardPars.Zip(
                 context.Method.GetParameters(),
-                (x, y) => x.ParameterType.Equals(y.ParameterType)
+                (x, y) => x.ParameterType == y.ParameterType
                 );
 
-            if (comparisons.Any(x => !x)) {
+            if (comparisons.Any(x => !x))
+            {
                 return null;
             }
 
             return guard;
+        }
+
+        /// <summary>
+        /// Returns the list of possible names of guard methods / properties for the given method.
+        /// </summary>
+        public static Func<MethodInfo, IEnumerable<string>> BuildPossibleGuardNames = method => {
+
+            var guardNames = new List<string>();
+
+            const string GuardPrefix = "Can";
+
+            var methodName = method.Name;
+
+            guardNames.Add(GuardPrefix + methodName);
+
+            const string AsyncMethodSuffix = "Async";
+
+            if (methodName.EndsWith(AsyncMethodSuffix, StringComparison.OrdinalIgnoreCase)) {
+                guardNames.Add(GuardPrefix + methodName.Substring(0, methodName.Length - AsyncMethodSuffix.Length));
+            }
+
+            return guardNames;
+        };
+
+        static MethodInfo GetMethodInfo(Type t, string methodName)
+        {
+#if WINDOWS_UWP
+            return t.GetRuntimeMethods().SingleOrDefault(m => m.Name == methodName);
 #else
-			var guardName = "Can" + context.Method.Name;
-            var targetType = context.Target.GetType();
-            var guard = targetType.GetMethod(guardName);
-
-			if (guard ==null) return null;
-			if (guard.ContainsGenericParameters) return null;
-			if (typeof(bool) != guard.ReturnType) return null;
-
-			var guardPars = guard.GetParameters();
-			var actionPars = context.Method.GetParameters();
-			if (guardPars.Length == 0) return guard;
-			if (guardPars.Length != actionPars.Length) return null;
-
-		    var comparisons = guardPars.Zip(
-		        context.Method.GetParameters(),
-		        (x, y) => x.ParameterType == y.ParameterType
-		        );
-
-			if (comparisons.Any(x => !x)) {
-			    return null;
-			}
-
-			return guard;
+            return t.GetMethod(methodName);
 #endif
         }
     }

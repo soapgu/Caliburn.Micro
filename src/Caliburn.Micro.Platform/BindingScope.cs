@@ -2,7 +2,7 @@
     using System;
     using System.Collections.Generic;
     using System.Linq;
-#if WinRT
+#if WINDOWS_UWP
     using System.ServiceModel;
     using Windows.UI.Xaml;
     using Windows.UI.Xaml.Controls;
@@ -19,9 +19,33 @@
     /// Provides methods for searching a given scope for named elements.
     /// </summary>
     public static class BindingScope {
-        static readonly List<Func<Type, bool>> ChildResolverFilters = new List<Func<Type, bool>>();
-        static readonly List<Func<DependencyObject, IEnumerable<DependencyObject>>> ChildResolvers = new List<Func<DependencyObject, IEnumerable<DependencyObject>>>();
+        static readonly List<ChildResolver> ChildResolvers = new List<ChildResolver>();
         static readonly Dictionary<Type, Object> NonResolvableChildTypes = new Dictionary<Type, Object>();
+
+        static BindingScope()
+        {
+            AddChildResolver<ContentControl>(e => new[] { e.Content as DependencyObject });
+            AddChildResolver<ItemsControl>(e => e.Items.OfType<DependencyObject>().ToArray() );
+#if !WINDOWS_UWP
+            AddChildResolver<HeaderedContentControl>(e => new[] { e.Header as DependencyObject });
+            AddChildResolver<HeaderedItemsControl>(e => new[] { e.Header as DependencyObject });
+#endif
+#if WINDOWS_UWP
+            AddChildResolver<SemanticZoom>(e => new[] { e.ZoomedInView as DependencyObject, e.ZoomedOutView as DependencyObject });
+            AddChildResolver<ListViewBase>(e => new[] { e.Header as DependencyObject });
+#endif
+#if WINDOWS_UWP
+            AddChildResolver<ListViewBase>(e => new[] { e.Footer as DependencyObject });
+            AddChildResolver<Hub>(ResolveHub);
+            AddChildResolver<HubSection>(e => new[] { e.Header as DependencyObject });
+            AddChildResolver<CommandBar>(ResolveCommandBar);
+            AddChildResolver<Button>(e => ResolveFlyoutBase(e.Flyout));
+            AddChildResolver<FrameworkElement>(e => ResolveFlyoutBase(FlyoutBase.GetAttachedFlyout(e)));
+#endif
+#if WINDOWS_UWP
+            AddChildResolver<SplitView>(e => new[] { e.Pane as DependencyObject, e.Content as DependencyObject });
+#endif
+        }
 
         /// <summary>
         /// Searches through the list of named elements looking for a case-insensitive match.
@@ -30,7 +54,7 @@
         /// <param name="name">The name to search for.</param>
         /// <returns>The named element or null if not found.</returns>
         public static FrameworkElement FindName(this IEnumerable<FrameworkElement> elementsToSearch, string name) {
-#if WinRT
+#if WINDOWS_UWP
             return elementsToSearch.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 #else
             return elementsToSearch.FirstOrDefault(x => x.Name.Equals(name, StringComparison.InvariantCultureIgnoreCase));
@@ -42,7 +66,7 @@
         /// </summary>
         /// <param name="filter">The type filter.</param>
         /// <param name="resolver">The resolver.</param>
-        public static void AddChildResolver(Func<Type, bool> filter, Func<DependencyObject, IEnumerable<DependencyObject>> resolver) {
+        public static ChildResolver AddChildResolver(Func<Type, bool> filter, Func<DependencyObject, IEnumerable<DependencyObject>> resolver) {
             if (filter == null) {
                 throw new ArgumentNullException("filter");
             }
@@ -52,8 +76,31 @@
             }
 
             NonResolvableChildTypes.Clear();
-            ChildResolverFilters.Add(filter);
-            ChildResolvers.Add(resolver);
+            
+            var childResolver = new ChildResolver(filter, resolver);
+
+            ChildResolvers.Add(childResolver);
+
+            return childResolver;
+        }
+
+        /// <summary>
+        /// Adds a child resolver.
+        /// </summary>
+        /// <param name="resolver">The resolver.</param>
+        public static ChildResolver AddChildResolver<T>(Func<T, IEnumerable<DependencyObject>> resolver) where T : DependencyObject
+        {
+            if (resolver == null) {
+                throw new ArgumentNullException("resolver");
+            }
+
+            NonResolvableChildTypes.Clear();
+
+            var childResolver = new ChildResolver<T>(resolver);
+
+            ChildResolvers.Add(childResolver);
+
+            return childResolver;
         }
 
         /// <summary>
@@ -61,19 +108,12 @@
         /// </summary>
         /// <param name="resolver">The resolver to remove.</param>
         /// <returns>true, when the resolver was (found and) removed.</returns>
-        public static bool RemoveChildResolver(Func<DependencyObject, IEnumerable<DependencyObject>> resolver) {
+        public static bool RemoveChildResolver(ChildResolver resolver) {
             if (resolver == null) {
                 throw new ArgumentNullException("resolver");
             }
 
-            var index = ChildResolvers.IndexOf(resolver);
-            if (index >= 0) {
-                ChildResolverFilters.RemoveAt(index);
-                ChildResolvers.RemoveAt(index);
-                return true;
-            }
-
-            return false;
+            return ChildResolvers.Remove(resolver);
         }
 
         /// <summary>
@@ -85,6 +125,12 @@
             var routeHops = FindScopeNamingRoute(elementInScope);
             return FindNamedDescendants(routeHops);
         };
+
+        /// <summary>
+        /// Gets the parent of the given object in the Visual Tree.
+        /// </summary>
+        /// <returns>The parent of the given object in the Visual Tree</returns>
+        public static Func<DependencyObject, DependencyObject> GetVisualParent = e => VisualTreeHelper.GetParent(e);
 
         /// <summary>
         /// Finds a set of named <see cref="FrameworkElement"/> instances in each hop in a <see cref="ScopeNamingRoute"/>.
@@ -109,6 +155,9 @@
 
             while (queue.Count > 0) {
                 var current = queue.Dequeue();
+                if (current == null)
+                    continue;
+                    
                 var currentElement = current as FrameworkElement;
 
                 if (currentElement != null && !string.IsNullOrEmpty(currentElement.Name))
@@ -123,7 +172,7 @@
                     continue;
                 }
 
-#if NET
+#if NET || NETCORE
                 var childCount = (current is Visual || current is Visual3D)
                     ? VisualTreeHelper.GetChildrenCount(current) : 0;
 #else
@@ -136,7 +185,7 @@
                         queue.Enqueue(childDo);
                     }
 
-#if WinRT
+#if WINDOWS_UWP
                     var page = current as Page;
 
                     if (page != null) {
@@ -149,117 +198,19 @@
 #endif
                 }
                 else {
-                    var contentControl = current as ContentControl;
-                    if (contentControl != null) {
-                        if (contentControl.Content is DependencyObject)
-                            queue.Enqueue(contentControl.Content as DependencyObject);
-#if !SILVERLIGHT && !WinRT
-                        var headeredControl = contentControl as HeaderedContentControl;
-                        if (headeredControl != null && headeredControl.Header is DependencyObject)
-                            queue.Enqueue(headeredControl.Header as DependencyObject);
-#endif
-                    }
+                    var currentType = current.GetType();
 
-                    var itemsControl = current as ItemsControl;
-                    if (itemsControl != null) {
-                        itemsControl.Items.OfType<DependencyObject>()
-                                    .Apply(queue.Enqueue);
-#if !SILVERLIGHT && !WinRT
-                        var headeredControl = itemsControl as HeaderedItemsControl;
-                        if (headeredControl != null && headeredControl.Header is DependencyObject)
-                            queue.Enqueue(headeredControl.Header as DependencyObject);
-#endif
-                    }
-#if WinRT
-                    var semanticZoom = current as SemanticZoom;
-                    if (semanticZoom != null) {
-                        if (semanticZoom.ZoomedInView is DependencyObject)
-                            queue.Enqueue(semanticZoom.ZoomedInView as DependencyObject);
+                    if (!NonResolvableChildTypes.ContainsKey(currentType)) {
+                        var resolvers = ChildResolvers.Where(r => r.CanResolve(currentType)).ToArray();
 
-                        if (semanticZoom.ZoomedOutView is DependencyObject)
-                            queue.Enqueue(semanticZoom.ZoomedOutView as DependencyObject);
-                    }
-
-                    var listViewBase = current as ListViewBase;
-                    if (listViewBase != null) {
-                        if (listViewBase.Header is DependencyObject)
-                            queue.Enqueue(listViewBase.Header as DependencyObject);
-                    }
-#endif
-#if WinRT81
-                    if (listViewBase != null) {
-                        if (listViewBase.Footer is DependencyObject)
-                            queue.Enqueue(listViewBase.Footer as DependencyObject);
-                    }
-                    
-                    var hub = current as Hub;
-                    if (hub != null) {
-                        if (hub.Header is DependencyObject)
-                            queue.Enqueue(hub.Header as DependencyObject);
-
-                        foreach(var section in hub.Sections) {
-                            queue.Enqueue(section);
+                        if (!resolvers.Any()) {
+                            NonResolvableChildTypes[currentType] = null;
                         }
-                    }
-
-                    var hubSection = current as HubSection;
-                    if (hubSection != null) {
-                        if (hubSection.Header is DependencyObject)
-                            queue.Enqueue(hubSection.Header as DependencyObject);
-                    }
-
-                    var commandBar = current as CommandBar;
-                    if (commandBar != null) {
-                        foreach (var command in commandBar.PrimaryCommands) {
-                            if (command is DependencyObject)
-                                queue.Enqueue(command as DependencyObject);
-                        }
-
-                        foreach (var command in commandBar.SecondaryCommands) {
-                            if (command is DependencyObject)
-                                queue.Enqueue(command as DependencyObject);
-                        }
-                    }
-
-                    var button = current as Button;
-
-                    if (button != null) {
-                        var flyoutBase = button.Flyout;
-
-                        if (flyoutBase != null) {
-                            foreach (var flyoutItem in DecomposeFlyout(flyoutBase)) {
-                                queue.Enqueue(flyoutItem);
-                            }
-                        }
-                    }
-
-                    var element = current as FrameworkElement;
-
-                    if (element != null) {
-                        var flyoutBase = Flyout.GetAttachedFlyout(element);
-
-                        if (flyoutBase != null) {
-                            foreach (var flyoutItem in DecomposeFlyout(flyoutBase)) {
-                                queue.Enqueue(flyoutItem);
-                            }
-                        }
-                    }
-
-#endif
-                    else {
-                        var currentType = current.GetType();
-
-                        if (!NonResolvableChildTypes.ContainsKey(currentType)) {
-                            var canResolve = ChildResolverFilters.Any(f => f(currentType));
-
-                            if (!canResolve) {
-                                NonResolvableChildTypes[currentType] = null;
-                            }
-                            else {
-                                ChildResolvers.SelectMany(r => r(current) ?? Enumerable.Empty<DependencyObject>())
-                                              .Where(c => c != null)
-                                              .Apply(queue.Enqueue);
-                            }
+                        else {
+                            resolvers
+                                .SelectMany(r => r.Resolve(current) ?? Enumerable.Empty<DependencyObject>())
+                                .Where(c => c != null)
+                                .Apply(queue.Enqueue);
                         }
                     }
                 }
@@ -268,8 +219,11 @@
             return descendants;
         };
 
-#if WinRT81
-        private static IEnumerable<DependencyObject> DecomposeFlyout(FlyoutBase flyoutBase) {
+#if WINDOWS_UWP
+        private static IEnumerable<DependencyObject> ResolveFlyoutBase(FlyoutBase flyoutBase) {
+            if (flyoutBase == null)
+                yield break;
+
             var flyout = flyoutBase as Flyout;
 
             if (flyout != null && flyout.Content != null)
@@ -279,9 +233,40 @@
 
             if (menuFlyout != null && menuFlyout.Items != null) {
                 foreach (var item in menuFlyout.Items) {
-                    yield return item;
+                    foreach (var subItem in ResolveMenuFlyoutItems(item)) {
+                        yield return subItem;
+                    }
                 }
             }
+        }
+
+        private static IEnumerable<DependencyObject> ResolveMenuFlyoutItems(MenuFlyoutItemBase item) {
+            yield return item;
+            var subItem = item as MenuFlyoutSubItem;
+
+            if (subItem != null && subItem.Items != null) {
+                foreach (var subSubItem in subItem.Items) {
+                    yield return subSubItem;
+                }
+            }
+        }
+
+        private static IEnumerable<DependencyObject> ResolveCommandBar(CommandBar commandBar) {
+            foreach (var child in commandBar.PrimaryCommands.OfType<DependencyObject>()) {
+                yield return child;
+            }
+
+            foreach (var child in commandBar.SecondaryCommands.OfType<DependencyObject>())
+            {
+                yield return child;
+            }
+        }
+
+        private static IEnumerable<DependencyObject> ResolveHub(Hub hub) {
+            yield return hub.Header as DependencyObject;
+
+            foreach (var section in hub.Sections)
+                yield return section;
         }
 #endif
 
@@ -306,16 +291,16 @@
 
                 if (root is UserControl)
                     break;
-#if !SILVERLIGHT
+
                 if (root is Page) {
                     root = ((Page) root).Content as DependencyObject ?? root;
                     break;
                 }
-#endif
+
                 if ((bool) root.GetValue(View.IsScopeRootProperty))
                     break;
 
-#if WinRT
+#if WINDOWS_UWP
                 if (root is AppBar) {
                     var frame = Window.Current.Content as Frame;
                     var page = (frame != null) ? frame.Content as Page : null;
@@ -334,7 +319,7 @@
                 }
 
                 previous = root;
-                root = VisualTreeHelper.GetParent(previous);
+                root = GetVisualParent(previous);
             }
 
             routeHops.Root = root;
@@ -354,10 +339,6 @@
             public DependencyObject Root {
                 get { return root; }
                 set {
-                    if (path.Count > 0 && !path.ContainsKey(value)) {
-                        throw new ArgumentException("Value is not a hop source in the route.");
-                    }
-
                     if (path.ContainsValue(value)) {
                         throw new ArgumentException("Value is a target of some route hop; cannot be a root.");
                     }

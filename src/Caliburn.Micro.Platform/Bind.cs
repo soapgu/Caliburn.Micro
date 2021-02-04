@@ -1,7 +1,19 @@
-﻿namespace Caliburn.Micro {
-#if WinRT
+﻿#if XFORMS
+namespace Caliburn.Micro.Xamarin.Forms
+#else
+namespace Caliburn.Micro
+#endif
+{
+    using System;
+#if WINDOWS_UWP
     using Windows.UI.Xaml;
     using Windows.UI.Xaml.Data;
+#elif XFORMS
+    using global::Xamarin.Forms;
+    using UIElement = global::Xamarin.Forms.Element;
+    using FrameworkElement = global::Xamarin.Forms.VisualElement;
+    using DependencyProperty = global::Xamarin.Forms.BindableProperty;
+    using DependencyObject =global::Xamarin.Forms.BindableObject;
 #else
     using System.Windows;
     using System.Windows.Data;
@@ -15,31 +27,30 @@
         ///   Allows binding on an existing view. Use this on root UserControls, Pages and Windows; not in a DataTemplate.
         /// </summary>
         public static DependencyProperty ModelProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "Model",
                 typeof(object),
                 typeof(Bind),
-                new PropertyMetadata(null, ModelChanged)
-                );
+                null, 
+                ModelChanged);
 
         /// <summary>
         ///   Allows binding on an existing view without setting the data context. Use this from within a DataTemplate.
         /// </summary>
         public static DependencyProperty ModelWithoutContextProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "ModelWithoutContext",
                 typeof(object),
                 typeof(Bind),
-                new PropertyMetadata(null, ModelWithoutContextChanged)
-                );
+                null, 
+                ModelWithoutContextChanged);
 
         internal static DependencyProperty NoContextProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "NoContext",
                 typeof(bool),
                 typeof(Bind),
-                new PropertyMetadata(false)
-                );
+                false);
 
         /// <summary>
         ///   Gets the model to bind to.
@@ -89,16 +100,16 @@
 
             View.ExecuteOnLoad(fe, delegate {
                 var target = e.NewValue;
-                var containerKey = e.NewValue as string;
-                if (containerKey != null) {
-                    target = IoC.GetInstance(null, containerKey);
-                }
 
                 d.SetValue(View.IsScopeRootProperty, true);
 
+#if XFORMS
+                var context = fe.Id.ToString("N");
+#else
                 var context = string.IsNullOrEmpty(fe.Name)
                                   ? fe.GetHashCode().ToString()
                                   : fe.Name;
+#endif
 
                 ViewModelBinder.Bind(target, d, context);
             });
@@ -116,16 +127,15 @@
 
             View.ExecuteOnLoad(fe, delegate {
                 var target = e.NewValue;
-                var containerKey = e.NewValue as string;
-                if (containerKey != null) {
-                    target = IoC.GetInstance(null, containerKey);
-                }
-
                 d.SetValue(View.IsScopeRootProperty, true);
 
+#if XFORMS
+                var context = fe.Id.ToString("N");
+#else
                 var context = string.IsNullOrEmpty(fe.Name)
                                   ? fe.GetHashCode().ToString()
                                   : fe.Name;
+#endif
 
                 d.SetValue(NoContextProperty, true);
                 ViewModelBinder.Bind(target, d, context);
@@ -136,19 +146,19 @@
         /// Allows application of conventions at design-time.
         /// </summary>
         public static DependencyProperty AtDesignTimeProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "AtDesignTime",
                 typeof(bool),
                 typeof(Bind),
-                new PropertyMetadata(false, AtDesignTimeChanged)
-                );
+                false, 
+                AtDesignTimeChanged);
 
         /// <summary>
         /// Gets whether or not conventions are being applied at design-time.
         /// </summary>
         /// <param name="dependencyObject">The ui to apply conventions to.</param>
         /// <returns>Whether or not conventions are applied.</returns>
-#if NET
+#if NET || NETCORE
         [AttachedPropertyBrowsableForTypeAttribute(typeof(DependencyObject))]
 #endif
         public static bool GetAtDesignTime(DependencyObject dependencyObject) {
@@ -171,17 +181,19 @@
             var atDesignTime = (bool) e.NewValue;
             if (!atDesignTime)
                 return;
-
+#if XFORMS
+            d.SetBinding(DataContextProperty, String.Empty);
+#else
             BindingOperations.SetBinding(d, DataContextProperty, new Binding());
+#endif
         }
 
         static readonly DependencyProperty DataContextProperty =
-            DependencyProperty.RegisterAttached(
+            DependencyPropertyHelper.RegisterAttached(
                 "DataContext",
                 typeof(object),
                 typeof(Bind),
-                new PropertyMetadata(null, DataContextChanged)
-                );
+                null, DataContextChanged);
 
         static void DataContextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) {
             if (!View.InDesignMode)
@@ -194,8 +206,11 @@
             var fe = d as FrameworkElement;
             if (fe == null)
                 return;
-
+#if XFORMS
+            ViewModelBinder.Bind(e.NewValue, d, fe.Id.ToString("N"));
+#else
             ViewModelBinder.Bind(e.NewValue, d, string.IsNullOrEmpty(fe.Name) ? fe.GetHashCode().ToString() : fe.Name);
+#endif
         }
     }
 }
